@@ -1,0 +1,41 @@
+DBN->DDE pipeline (run from inside DDE/). Device is CPU on purpose: on this
+Apple Silicon machine, MPS was benchmarked ~18-36x SLOWER than CPU for this
+solver (many small sequential RK4 steps -> MPS kernel-launch overhead
+dominates), so CPU + perm_workers parallelism is the right lever here, not GPU.
+
+K_fit=2 (short/long train, inter test, POD1-4 used to fit test history)
+uv run python main.py \
+  --device cpu \
+  --train_a_expr ../DBN-DDE_inputs/short_input.csv \
+  --train_b_expr ../DBN-DDE_inputs/long_input.csv \
+  --test_expr ../DBN-DDE_inputs/inter_input.csv \
+  --edge_csvs ../DBN/results/short/consensus_edges_thr0.7.csv ../DBN/results/long/consensus_edges_thr0.7.csv \
+  --out_dir results_dde/kfit2 \
+  --K_fit 2 \
+  --epochs 400 \
+  --iters_hist 800 \
+  --seeds 0 1 2 3 4 \
+  --n_perm_time 200 \
+  --n_perm_edge 30 \
+  --perm_workers 8
+
+K_fit=6 (same data, POD1-14 used to fit test history; forecast metrics
+are evaluated on POD21-77 only -- the linear-regression comparison point)
+uv run python main.py \
+  --device cpu \
+  --train_a_expr ../DBN-DDE_inputs/short_input.csv \
+  --train_b_expr ../DBN-DDE_inputs/long_input.csv \
+  --test_expr ../DBN-DDE_inputs/inter_input.csv \
+  --edge_csvs ../DBN/results/short/consensus_edges_thr0.7.csv ../DBN/results/long/consensus_edges_thr0.7.csv \
+  --out_dir results_dde/kfit6 \
+  --K_fit 6 \
+  --epochs 400 \
+  --iters_hist 800 \
+  --seeds 0 1 2 3 4 \
+  --n_perm_time 200 \
+  --n_perm_edge 30 \
+  --perm_workers 8
+
+Linear/log/exp regression baseline, trained on inter POD<=14 only,
+evaluated on POD21-77 (same split as K_fit=6 above)
+uv run python modules/run_linear_regression.py

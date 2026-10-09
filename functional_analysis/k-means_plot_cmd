@@ -1,0 +1,5 @@
+python k-means_plot.py \
+  --short_dir short/cluster_lists \
+  --inter_dir inter/cluster_lists \
+  --long_dir long/cluster_lists \
+  --outdir k-means_plot
