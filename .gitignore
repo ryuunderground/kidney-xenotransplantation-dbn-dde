@@ -1,0 +1,67 @@
+# --- OS / editor / session junk ---
+.DS_Store
+.Rhistory
+.Rproj.user/
+~$*.docx
+~$*.doc
+.claude/
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+DDE/.venv/
+
+# =========================================================================
+# Data: raw counts, intermediate expression/DEG matrices, model outputs.
+# Nothing under these paths should be pushed -- data-sharing consent from
+# the source has not been confirmed. Only .py/.R/.Rmd/.tex code and
+# non-data config (order.txt, *_cmd usage examples) should be tracked.
+# =========================================================================
+
+# preprocessing/ -- keep the R scripts, drop every data artifact
+preprocessing/Samples/*/*.txt
+preprocessing/Samples/*/.DS_Store
+preprocessing/.RData
+preprocessing/.short_input.csv
+preprocessing/DEG_Results/
+preprocessing/DEG_expr/
+preprocessing/TMM_CSV/
+preprocessing/DBN-DDE_candidates/
+preprocessing/annotation/
+preprocessing/inputs/
+preprocessing/mev_input/
+preprocessing/total_deg_lists/
+preprocessing/k-means_diagnosis/
+
+# shared gene x POD expression matrices consumed by DBN and DDE
+DBN-DDE_inputs/
+
+# functional_analysis/ -- keep the .py scripts and *_cmd usage examples
+functional_analysis/DEG_expr/
+functional_analysis/short/
+functional_analysis/inter/
+functional_analysis/long/
+functional_analysis/ifn_measured_expression/
+functional_analysis/k-means_plot/
+functional_analysis/cluego_result/
+
+# DBN/ -- keep the .py modules, drop learned-structure outputs
+DBN/results/
+
+# DDE/ -- keep main.py + modules/, drop checkpoints/predictions/plots
+DDE/results_dde/
+
+# root-level supplementary tables/notes derived from the data (regenerable)
+main_table.csv
+sup_table.csv
+sup_table_S*.csv
+sup_note_S*.tex
+sup_note_S*.pdf
+sup_note_S*.aux
+sup_note_S*.log
+table_legends.txt
+*_Supplementary_table.xlsx
+
+# --- editor settings ---
+.vscode/

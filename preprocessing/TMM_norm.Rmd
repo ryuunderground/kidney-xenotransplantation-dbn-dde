@@ -1,0 +1,247 @@
+---
+title: "xeno_kidney"
+output: html_document
+date: "2026-07-21"
+---
+
+# Repeat 3 times but changing sample names
+## 1M1: Short-term survival
+## 5F1: Intermediate-term survival
+## 2M1: Long-term survival
+
+### 1. Install and load required packages
+
+```{r setup, include=FALSE}
+# CRAN packages
+cran_packages <- c("clipr", "stringr", "calibrate", "ggplot2", "gridExtra", "ggrepel")
+for (pkg in cran_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+
+# Bioconductor packages
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+bioc_packages <- c("edgeR", "limma", "locfit")
+for (pkg in bioc_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    BiocManager::install(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+
+# Set the working directory
+root <- "~/Documents/github/kidney-xenotransplantation-dbn-dde/preprocessing"
+setwd(root)
+getwd()
+```
+
+### Build the gene expression matrix
+
+```{r}
+# Load sample metadata
+meta_data <- read.csv("./inputs/1M1.csv", header = TRUE)
+sample_names <- as.character(meta_data[, 1])
+
+# Read each sample's count file and collect expression values
+expression_list <- list()
+for (i in seq_along(sample_names)) {
+  file_path <- file.path(root, "Samples/1M1", sample_names[i])
+  temp <- read.table(file_path, sep = "", header = FALSE)
+  if (i == 1) {
+    gene_symbols <- as.character(temp[, 1])  # gene IDs from the first sample
+  }
+  expression_list[[i]] <- temp[, 2]  # expression values only
+}
+
+# Combine into one expression matrix
+Expression <- as.data.frame(do.call(cbind, expression_list))
+rownames(Expression) <- gene_symbols
+colnames(Expression) <- sample_names
+
+# Debug
+head(Expression)
+dim(Expression)
+head(gene_symbols)
+```
+
+### Remove all-zero genes (mRNA data)
+
+```{r}
+nonzero_gene_idx <- rowSums(Expression) != 0
+Expression <- Expression[nonzero_gene_idx, ]
+gene_symbols <- gene_symbols[nonzero_gene_idx]
+cat("Number of remaining genes:", nrow(Expression), "\n")
+
+### 2. Define group information
+
+# Group vector from metadata, Control as reference level
+group <- as.factor(meta_data[, 2])
+if ("Control" %in% levels(group)) {
+  group <- relevel(group, ref = "Control")
+}
+print(table(group))
+
+### 3. Create and filter the DGEList
+
+dge <- DGEList(counts = Expression, group = group)
+
+# Drop lowly expressed genes
+keep <- filterByExpr(dge)
+dge <- dge[keep, , keep.lib.sizes = FALSE]
+dge <- DGEList(counts = dge$counts, group = group)  # rebuild after filtering
+
+cat("Genes after filtering:", nrow(dge$counts), "\n")
+```
+
+### TMM normalization
+
+```{r}
+# Compute normalization factors
+dge <- calcNormFactors(dge)
+cat("Normalization factors:\n")
+print(dge$samples$norm.factors)
+
+# TMM-normalized CPM (raw and log-transformed)
+cpm_tmm <- cpm(dge, normalized.lib.sizes = TRUE, log = FALSE)
+log_cpm_tmm <- cpm(dge, normalized.lib.sizes = TRUE, log = TRUE)
+
+# Save results
+tmm_folder <- "./TMM_CSV/1M1/"
+dir.create(tmm_folder, showWarnings = FALSE)
+tmm_path <- file.path(tmm_folder, "short_TMM.csv")
+log_tmm_path <- file.path(tmm_folder, "short_logTMM.csv")
+write.csv(cpm_tmm, tmm_path, row.names = TRUE, quote = FALSE)
+write.csv(log_cpm_tmm, log_tmm_path, row.names = TRUE, quote = FALSE)
+```
+
+### Convert Ensembl IDs to gene names and deduplicate
+
+```{r}
+# Read the annotation file
+# Column 1: Ensembl gene ID, column 2: gene name/symbol
+annotation_path <- file.path(root, "annotation/mac_ann.txt")
+gene_annot <- read.csv(
+  annotation_path,
+  header = TRUE,
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+head(gene_annot)
+colnames(gene_annot)
+
+annotation_map <- data.frame(
+  EnsemblID = as.character(gene_annot[[1]]),
+  GeneName  = as.character(gene_annot[[2]]),
+  stringsAsFactors = FALSE
+)
+
+# Strip version suffix, e.g. ENSMFAG00000048966.1 -> ENSMFAG00000048966
+annotation_map$EnsemblID <- sub("\\..*$", "", annotation_map$EnsemblID)
+
+# Keep only the first row per duplicated Ensembl ID
+annotation_map <- annotation_map[!duplicated(annotation_map$EnsemblID), , drop = FALSE]
+
+# Treat blank gene names as NA
+annotation_map$GeneName <- trimws(annotation_map$GeneName)
+annotation_map$GeneName[is.na(annotation_map$GeneName) | annotation_map$GeneName == ""] <- NA
+```
+
+### Match Ensembl IDs to gene-name symbols
+
+```{r}
+expression_ensembl_ids <- sub("\\..*$", "", rownames(cpm_tmm))
+
+matched_gene_names <- annotation_map$GeneName[
+  match(expression_ensembl_ids, annotation_map$EnsemblID)
+]
+
+cat("Total genes after filterByExpr:", length(expression_ensembl_ids), "\n")
+cat("Successfully annotated genes:", sum(!is.na(matched_gene_names)), "\n")
+cat("Unannotated genes:", sum(is.na(matched_gene_names)), "\n")
+```
+
+### Remove genes without an annotated name
+
+```{r}
+annotated_idx <- !is.na(matched_gene_names)
+cpm_tmm_annotated <- cpm_tmm[annotated_idx, , drop = FALSE]
+log_cpm_tmm_annotated <- log_cpm_tmm[annotated_idx, , drop = FALSE]
+annotated_ensembl_ids <- expression_ensembl_ids[annotated_idx]
+annotated_gene_names <- matched_gene_names[annotated_idx]
+```
+
+### Keep one row per duplicated gene-name symbol
+
+```{r}
+# When multiple Ensembl IDs map to the same gene name, keep the one
+# with the highest max TMM CPM across samples
+row_max_tmm <- apply(cpm_tmm_annotated, 1, max, na.rm = TRUE)
+
+gene_info <- data.frame(
+  RowIndex  = seq_len(nrow(cpm_tmm_annotated)),
+  EnsemblID = annotated_ensembl_ids,
+  GeneName  = annotated_gene_names,
+  RowMaxTMM = row_max_tmm,
+  stringsAsFactors = FALSE
+)
+
+# Sort by GeneName, then by descending RowMaxTMM within each gene
+gene_info <- gene_info[
+  order(gene_info$GeneName, -gene_info$RowMaxTMM, gene_info$EnsemblID),
+  ,
+  drop = FALSE
+]
+
+# Keep the first (highest RowMaxTMM) row per GeneName
+gene_info_unique <- gene_info[!duplicated(gene_info$GeneName), , drop = FALSE]
+
+cat("Duplicated gene-name rows removed:", nrow(gene_info) - nrow(gene_info_unique), "\n")
+```
+
+### Apply the selected rows to both matrices
+
+```{r}
+selected_rows <- gene_info_unique$RowIndex
+cpm_tmm_gene <- cpm_tmm_annotated[selected_rows, , drop = FALSE]
+log_cpm_tmm_gene <- log_cpm_tmm_annotated[selected_rows, , drop = FALSE]
+
+# Use gene names (e.g. APOL6, DDX60) as row names instead of Ensembl IDs
+rownames(cpm_tmm_gene) <- gene_info_unique$GeneName
+rownames(log_cpm_tmm_gene) <- gene_info_unique$GeneName
+```
+
+### Sort gene names alphabetically
+
+```{r}
+alphabetical_order <- order(rownames(cpm_tmm_gene), na.last = TRUE)
+cpm_tmm_gene <- cpm_tmm_gene[alphabetical_order, , drop = FALSE]
+log_cpm_tmm_gene <- log_cpm_tmm_gene[alphabetical_order, , drop = FALSE]
+```
+
+### Save final results
+
+```{r}
+tmm_folder <- file.path(root, "TMM_CSV", "1M1")
+dir.create(tmm_folder, recursive = TRUE, showWarnings = FALSE)
+
+tmm_path <- file.path(tmm_folder, "short_TMM_geneName.csv")
+log_tmm_path <- file.path(tmm_folder, "short_logTMM_geneName.csv")
+
+write.csv(cpm_tmm_gene, tmm_path, row.names = TRUE, quote = FALSE)
+write.csv(log_cpm_tmm_gene, log_tmm_path, row.names = TRUE, quote = FALSE)
+```
+
+### Final checks
+
+```{r}
+cat("Final number of unique annotated genes:", nrow(cpm_tmm_gene), "\n")
+cat("Non-log TMM file:", tmm_path, "\n")
+cat("Log TMM file:", log_tmm_path, "\n")
+
+head(cpm_tmm_gene)
+head(log_cpm_tmm_gene)
+```
